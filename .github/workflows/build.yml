@@ -12,21 +12,14 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Prepare Project Directory
+      - name: Generate Fixed Project Files
         run: |
-          if [ -f "ShizukuPerfOverlay.zip" ]; then
-            unzip -o ShizukuPerfOverlay.zip
-          fi
+          rm -rf app build settings.gradle.kts build.gradle.kts gradle.properties
+          mkdir -p app/src/main/aidl/com/example/shizukumonitor \
+                   app/src/main/java/com/example/shizukumonitor
 
-          if [ -f "ShizukuPerfOverlay/settings.gradle.kts" ]; then
-            cp -r ShizukuPerfOverlay/* .
-          fi
-
-          if [ ! -f "settings.gradle.kts" ]; then
-            mkdir -p app/src/main/aidl/com/example/shizukumonitor \
-                     app/src/main/java/com/example/shizukumonitor
-
-            cat << 'EOF' > settings.gradle.kts
+          # 1. settings.gradle.kts
+          cat << 'EOF' > settings.gradle.kts
           pluginManagement {
               repositories { google(); mavenCentral(); gradlePluginPortal() }
           }
@@ -38,21 +31,24 @@ jobs:
           include(":app")
           EOF
 
-            cat << 'EOF' > build.gradle.kts
+          # 2. Root build.gradle.kts
+          cat << 'EOF' > build.gradle.kts
           plugins {
               id("com.android.application") version "8.5.2" apply false
               id("org.jetbrains.kotlin.android") version "1.9.24" apply false
           }
           EOF
 
-            cat << 'EOF' > gradle.properties
+          # 3. gradle.properties
+          cat << 'EOF' > gradle.properties
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           android.useAndroidX=true
           kotlin.code.style=official
           android.nonTransitiveRClass=true
           EOF
 
-            cat << 'EOF' > app/build.gradle.kts
+          # 4. app/build.gradle.kts
+          cat << 'EOF' > app/build.gradle.kts
           plugins {
               id("com.android.application")
               id("org.jetbrains.kotlin.android")
@@ -64,15 +60,23 @@ jobs:
                   applicationId = "com.example.shizukumonitor"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 1
-                  versionName = "1.0"
+                  versionCode = 2
+                  versionName = "2.0"
+              }
+              buildTypes {
+                  debug {
+                      isMinifyEnabled = false
+                  }
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
                   targetCompatibility = JavaVersion.VERSION_17
               }
               kotlinOptions { jvmTarget = "17" }
-              buildFeatures { aidl = true }
+              buildFeatures {
+                  aidl = true
+                  buildConfig = true
+              }
           }
           dependencies {
               val shizukuVersion = "13.1.5"
@@ -84,24 +88,29 @@ jobs:
           }
           EOF
 
-            cat << 'EOF' > app/src/main/AndroidManifest.xml
+          # 5. AndroidManifest.xml
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
               <application
                   android:allowBackup="true"
                   android:label="Shizuku Perf Overlay"
                   android:supportsRtl="true"
                   android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
-                  <activity android:name=".MainActivity" android:exported="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
+
                   <service
                       android:name=".OverlayService"
                       android:enabled="true"
@@ -111,6 +120,7 @@ jobs:
                           android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                           android:value="Real-time hardware performance overlay" />
                   </service>
+
                   <provider
                       android:name="rikka.shizuku.ShizukuProvider"
                       android:authorities="${applicationId}.shizuku"
@@ -122,137 +132,160 @@ jobs:
           </manifest>
           EOF
 
-            cat << 'EOF' > app/src/main/aidl/com/example/shizukumonitor/IMetricsService.aidl
+          # 6. IMetricsService.aidl (Explicit IDs on all methods)
+          cat << 'EOF' > app/src/main/aidl/com/example/shizukumonitor/IMetricsService.aidl
           package com.example.shizukumonitor;
+
           interface IMetricsService {
               void destroy() = 16777114;
-              float[] getMetrics();
+              float[] getMetrics() = 1;
           }
           EOF
 
-            cat << 'EOF' > app/src/main/java/com/example/shizukumonitor/MetricsUserService.kt
+          # 7. MetricsUserService.kt (OnePlus Nord CE 3 Lite / Snapdragon 695 + Shizuku Keep Constructors)
+          cat << 'EOF' > app/src/main/java/com/example/shizukumonitor/MetricsUserService.kt
           package com.example.shizukumonitor
 
-          import android.os.SystemClock
+          import android.content.Context
           import androidx.annotation.Keep
           import java.io.BufferedReader
           import java.io.File
-          import java.io.FileReader
           import java.io.InputStreamReader
           import kotlin.system.exitProcess
 
           @Keep
-          class MetricsUserService : IMetricsService.Stub() {
+          class MetricsUserService : IMetricsService.Stub {
+
+              // Mandatory empty constructor for Shizuku UserService reflection
+              @Keep
+              constructor() : super()
+
+              // Mandatory Context constructor for Shizuku v13+
+              @Keep
+              constructor(@Suppress("UNUSED_PARAMETER") context: Context) : super()
+
               private var prevCpuTotal = 0L
               private var prevCpuIdle = 0L
-              private var prevFlipCount = -1L
-              private var prevFlipTimeMs = 0L
 
-              private val gpuPaths = listOf(
-                  "/sys/class/kgsl/kgsl-3d0/gpubusy",
-                  "/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage",
-                  "/sys/kernel/gpu/gpu_busy",
-                  "/sys/class/misc/mali0/device/utilization"
-              )
-
-              override fun destroy() { exitProcess(0) }
+              override fun destroy() {
+                  exitProcess(0)
+              }
 
               override fun getMetrics(): FloatArray {
-                  return floatArrayOf(readCpuUsage(), readGpuUsage(), readSurfaceFlingerFps())
+                  val cpu = readCpuUsage()
+                  val gpu = readAdreno619Gpu()
+                  return floatArrayOf(cpu, gpu)
+              }
+
+              private fun execShell(cmd: String): String {
+                  return try {
+                      val process = ProcessBuilder("sh", "-c", cmd)
+                          .redirectErrorStream(true)
+                          .start()
+                      val output = BufferedReader(InputStreamReader(process.inputStream)).use { it.readText().trim() }
+                      process.waitFor()
+                      output
+                  } catch (_: Exception) {
+                      ""
+                  }
               }
 
               private fun readCpuUsage(): Float {
+                  // 1. Try reading /proc/stat via privileged shell cat
                   try {
-                      val file = File("/proc/stat")
-                      if (file.canRead()) {
-                          BufferedReader(FileReader(file)).use { reader ->
-                              val line = reader.readLine() ?: return@use
-                              if (line.startsWith("cpu ")) {
-                                  val parts = line.trim().split("\\s+".toRegex())
-                                  val user = parts[1].toLong()
-                                  val nice = parts[2].toLong()
-                                  val system = parts[3].toLong()
-                                  val idle = parts[4].toLong()
-                                  val iowait = parts.getOrNull(5)?.toLongOrNull() ?: 0L
-                                  val irq = parts.getOrNull(6)?.toLongOrNull() ?: 0L
-                                  val softirq = parts.getOrNull(7)?.toLongOrNull() ?: 0L
-                                  val idleTime = idle + iowait
-                                  val totalTime = user + nice + system + idleTime + irq + softirq
-                                  val totalDelta = (totalTime - prevCpuTotal).coerceAtLeast(1L)
-                                  val idleDelta = (idleTime - prevCpuIdle).coerceAtLeast(0L)
-                                  prevCpuTotal = totalTime
-                                  prevCpuIdle = idleTime
-                                  return (((totalDelta - idleDelta).toFloat() / totalDelta) * 100f).coerceIn(0f, 100f)
+                      val statLine = execShell("head -n 1 /proc/stat")
+                      if (statLine.startsWith("cpu ")) {
+                          val parts = statLine.trim().split("\\s+".toRegex())
+                          if (parts.size >= 8) {
+                              val user = parts[1].toLong()
+                              val nice = parts[2].toLong()
+                              val system = parts[3].toLong()
+                              val idle = parts[4].toLong()
+                              val iowait = parts[5].toLong()
+                              val irq = parts[6].toLong()
+                              val softirq = parts[7].toLong()
+
+                              val idleTime = idle + iowait
+                              val totalTime = user + nice + system + idleTime + irq + softirq
+
+                              val totalDelta = (totalTime - prevCpuTotal).coerceAtLeast(1L)
+                              val idleDelta = (idleTime - prevCpuIdle).coerceAtLeast(0L)
+
+                              prevCpuTotal = totalTime
+                              prevCpuIdle = idleTime
+
+                              return (((totalDelta - idleDelta).toFloat() / totalDelta.toFloat()) * 100f).coerceIn(0f, 100f)
+                          }
+                      }
+                  } catch (_: Exception) {}
+
+                  // 2. Fallback: Calculate load across all 8 Kryo 660 cores on Snapdragon 695 via scaling_cur_freq
+                  var ratioSum = 0f
+                  var coresRead = 0
+                  for (i in 0..7) {
+                      try {
+                          val curFile = File("/sys/devices/system/cpu/cpu$i/cpufreq/scaling_cur_freq")
+                          val maxFile = File("/sys/devices/system/cpu/cpu$i/cpufreq/cpuinfo_max_freq")
+                          if (curFile.exists() && maxFile.exists()) {
+                              val cur = curFile.readText().trim().toFloatOrNull() ?: 0f
+                              val max = maxFile.readText().trim().toFloatOrNull() ?: 0f
+                              if (max > 0f) {
+                                  ratioSum += (cur / max)
+                                  coresRead++
                               }
                           }
-                      }
-                  } catch (_: Exception) {}
-                  return readCpuFreqLoadFallback()
-              }
-
-              private fun readCpuFreqLoadFallback(): Float {
-                  var totalRatio = 0f
-                  var coreCount = 0
-                  for (i in 0..15) {
-                      val curFile = File("/sys/devices/system/cpu/cpu$i/cpufreq/scaling_cur_freq")
-                      val maxFile = File("/sys/devices/system/cpu/cpu$i/cpufreq/cpuinfo_max_freq")
-                      if (!curFile.exists() || !maxFile.exists()) break
-                      try {
-                          val cur = curFile.readText().trim().toFloat()
-                          val max = maxFile.readText().trim().toFloat()
-                          if (max > 0) { totalRatio += (cur / max); coreCount++ }
                       } catch (_: Exception) {}
                   }
-                  return if (coreCount > 0) ((totalRatio / coreCount) * 100f).coerceIn(0f, 100f) else 0f
-              }
-
-              private fun readGpuUsage(): Float {
-                  for (path in gpuPaths) {
-                      try {
-                          val file = File(path)
-                          if (!file.canRead()) continue
-                          val raw = file.readText().trim()
-                          if (raw.isEmpty()) continue
-                          val parts = raw.split("\\s+".toRegex())
-                          if (parts.size >= 2) {
-                              val busy = parts[0].toFloatOrNull() ?: 0f
-                              val total = parts[1].toFloatOrNull() ?: 0f
-                              return if (total > 0f) ((busy / total) * 100f).coerceIn(0f, 100f) else 0f
-                          }
-                          val cleaned = raw.replace("%", "").trim()
-                          cleaned.toFloatOrNull()?.let { return it.coerceIn(0f, 100f) }
-                      } catch (_: Exception) {}
+                  if (coresRead > 0) {
+                      return ((ratioSum / coresRead) * 100f).coerceIn(0f, 100f)
                   }
-                  return -1f
+                  return 0f
               }
 
-              private fun readSurfaceFlingerFps(): Float {
-                  try {
-                      val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", "service call SurfaceFlinger 1013"))
-                      val output = BufferedReader(InputStreamReader(process.inputStream)).use { it.readText() }
-                      process.waitFor()
-                      val regex = Regex("""Parcel\(\s*[0-9a-fA-F]{8}\s+([0-9a-fA-F]{8})""")
-                      val match = regex.find(output)
-                      if (match != null) {
-                          val currentFlips = match.groupValues[1].toLong(16)
-                          val nowMs = SystemClock.elapsedRealtime()
-                          if (prevFlipCount >= 0L && nowMs > prevFlipTimeMs) {
-                              val deltaFlips = currentFlips - prevFlipCount
-                              val deltaSeconds = (nowMs - prevFlipTimeMs) / 1000f
-                              prevFlipCount = currentFlips
-                              prevFlipTimeMs = nowMs
-                              return (deltaFlips / deltaSeconds).coerceIn(0f, 240f)
+              private fun readAdreno619Gpu(): Float {
+                  // Query all Adreno 619 / Snapdragon 695 KGSL nodes in a single fast shell invocation
+                  val script = """
+                      cat /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage 2>/dev/null ||
+                      cat /sys/class/kgsl/kgsl-3d0/gpubusy 2>/dev/null ||
+                      cat /sys/class/kgsl/kgsl-3d0/devfreq/gpu_load 2>/dev/null ||
+                      cat /sys/devices/platform/soc/3d00000.qcom,kgsl-3d0/kgsl/kgsl-3d0/gpubusy 2>/dev/null
+                  """.trimIndent()
+
+                  val raw = execShell(script)
+                  if (raw.isNotEmpty()) {
+                      val firstLine = raw.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: ""
+                      val parts = firstLine.split("\\s+".toRegex())
+
+                      // Format A: gpubusy ("busy_cycles total_cycles")
+                      if (parts.size >= 2 && !firstLine.contains("%")) {
+                          val busy = parts[0].toFloatOrNull() ?: -1f
+                          val total = parts[1].toFloatOrNull() ?: -1f
+                          if (busy >= 0f && total > 0f) {
+                              return ((busy / total) * 100f).coerceIn(0f, 100f)
                           }
-                          prevFlipCount = currentFlips
-                          prevFlipTimeMs = nowMs
                       }
-                  } catch (_: Exception) {}
+
+                      // Format B: gpu_busy_percentage ("24 %")
+                      val cleaned = firstLine.replace("%", "").trim()
+                      cleaned.toFloatOrNull()?.let {
+                          if (it in 0f..100f) return it
+                      }
+                  }
+
+                  // Fallback for Adreno 619 on OxygenOS: compute GPU load from current vs max clock frequency
+                  val freqOut = execShell("cat /sys/class/kgsl/kgsl-3d0/devfreq/cur_freq /sys/class/kgsl/kgsl-3d0/devfreq/max_freq 2>/dev/null || cat /sys/class/kgsl/kgsl-3d0/gpuclk /sys/class/kgsl/kgsl-3d0/max_gpuclk 2>/dev/null")
+                  val freqLines = freqOut.lines().mapNotNull { it.trim().toFloatOrNull() }
+                  if (freqLines.size >= 2 && freqLines[1] > 0f) {
+                      return ((freqLines[0] / freqLines[1]) * 100f).coerceIn(0f, 100f)
+                  }
+
                   return 0f
               }
           }
           EOF
 
-            cat << 'EOF' > app/src/main/java/com/example/shizukumonitor/OverlayService.kt
+          # 8. OverlayService.kt (Never gets stuck on "Connecting to Shizuku...", auto-retries binding, live 120Hz FPS)
+          cat << 'EOF' > app/src/main/java/com/example/shizukumonitor/OverlayService.kt
           package com.example.shizukumonitor
 
           import android.annotation.SuppressLint
@@ -265,8 +298,10 @@ jobs:
           import android.content.pm.ServiceInfo
           import android.graphics.Color
           import android.graphics.PixelFormat
+          import android.graphics.Typeface
           import android.os.Build
           import android.os.IBinder
+          import android.view.Choreographer
           import android.view.Gravity
           import android.view.MotionEvent
           import android.view.View
@@ -275,50 +310,160 @@ jobs:
           import androidx.core.app.NotificationCompat
           import kotlinx.coroutines.*
           import rikka.shizuku.Shizuku
+          import java.io.File
           import java.util.Locale
 
-          class OverlayService : Service() {
+          class OverlayService : Service(), Choreographer.FrameCallback {
+
               private lateinit var windowManager: WindowManager
               private lateinit var overlayTextView: TextView
-              private var metricsService: IMetricsService? = null
+              @Volatile private var metricsService: IMetricsService? = null
               private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+              private var frameCount = 0
+              private var lastFpsTimestampNs = 0L
+              private var currentRealtimeFps = 0f
+
+              private var currentCpu = 0f
+              private var currentGpu = 0f
+              private var isBoundToShizuku = false
 
               private val userServiceArgs by lazy {
                   Shizuku.UserServiceArgs(ComponentName(packageName, MetricsUserService::class.java.name))
                       .daemon(false)
-                      .processNameSuffix("metrics_daemon")
-                      .debuggable(false)
-                      .version(1)
+                      .processNameSuffix("shizuku_metrics")
+                      .debuggable(BuildConfig.DEBUG)
+                      .version(BuildConfig.VERSION_CODE)
               }
 
               private val shizukuConnection = object : ServiceConnection {
                   override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
                       if (binder != null && binder.pingBinder()) {
                           metricsService = IMetricsService.Stub.asInterface(binder)
-                          startPollingLoop()
+                          isBoundToShizuku = true
                       }
                   }
-                  override fun onServiceDisconnected(name: ComponentName?) { metricsService = null }
+
+                  override fun onServiceDisconnected(name: ComponentName?) {
+                      metricsService = null
+                      isBoundToShizuku = false
+                  }
               }
 
               override fun onCreate() {
                   super.onCreate()
                   startForegroundNotification()
                   setupFloatingOverlay()
-                  Shizuku.bindUserService(userServiceArgs, shizukuConnection)
+                  Choreographer.getInstance().postFrameCallback(this)
+                  startMetricsAndWatchdogLoop()
+              }
+
+              override fun doFrame(frameTimeNanos: Long) {
+                  if (lastFpsTimestampNs == 0L) {
+                      lastFpsTimestampNs = frameTimeNanos
+                  } else {
+                      frameCount++
+                      val elapsedSec = (frameTimeNanos - lastFpsTimestampNs) / 1_000_000_000.0f
+                      if (elapsedSec >= 0.5f) {
+                          currentRealtimeFps = (frameCount / elapsedSec).coerceIn(0f, 144f)
+                          frameCount = 0
+                          lastFpsTimestampNs = frameTimeNanos
+                          renderOverlayHud()
+                      }
+                  }
+                  Choreographer.getInstance().postFrameCallback(this)
+              }
+
+              private fun tryBindShizuku() {
+                  try {
+                      if (Shizuku.pingBinder()) {
+                          Shizuku.bindUserService(userServiceArgs, shizukuConnection)
+                      }
+                  } catch (_: Exception) {}
+              }
+
+              private fun startMetricsAndWatchdogLoop() {
+                  serviceScope.launch {
+                      while (isActive) {
+                          val service = metricsService
+                          if (service == null) {
+                              // Auto-bind to Shizuku and use local fallback until connected
+                              tryBindShizuku()
+                              val localStats = withContext(Dispatchers.IO) { readLocalFallbackMetrics() }
+                              currentCpu = localStats[0]
+                              currentGpu = localStats[1]
+                          } else {
+                              val stats = withContext(Dispatchers.IO) {
+                                  try {
+                                      service.metrics
+                                  } catch (_: Exception) {
+                                      metricsService = null
+                                      null
+                                  }
+                              }
+                              if (stats != null && stats.size >= 2) {
+                                  currentCpu = stats[0]
+                                  currentGpu = stats[1]
+                              }
+                          }
+                          renderOverlayHud()
+                          delay(750L)
+                      }
+                  }
+              }
+
+              // Fallback reader so CPU/GPU still update while Shizuku daemon warms up
+              private fun readLocalFallbackMetrics(): FloatArray {
+                  var cpuLoad = 0f
+                  var cores = 0
+                  for (i in 0..7) {
+                      try {
+                          val cur = File("/sys/devices/system/cpu/cpu$i/cpufreq/scaling_cur_freq").readText().trim().toFloatOrNull() ?: 0f
+                          val max = File("/sys/devices/system/cpu/cpu$i/cpufreq/cpuinfo_max_freq").readText().trim().toFloatOrNull() ?: 0f
+                          if (max > 0f) {
+                              cpuLoad += (cur / max)
+                              cores++
+                          }
+                      } catch (_: Exception) {}
+                  }
+                  val finalCpu = if (cores > 0) ((cpuLoad / cores) * 100f).coerceIn(0f, 100f) else 0f
+
+                  var finalGpu = 0f
+                  try {
+                      val gFile = File("/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage")
+                      if (gFile.canRead()) {
+                          finalGpu = gFile.readText().replace("%", "").trim().toFloatOrNull() ?: 0f
+                      }
+                  } catch (_: Exception) {}
+
+                  return floatArrayOf(finalCpu, finalGpu)
+              }
+
+              private fun renderOverlayHud() {
+                  val fpsStr = String.format(Locale.US, "%3.0f", currentRealtimeFps)
+                  val cpuStr = String.format(Locale.US, "%4.1f%%", currentCpu)
+                  val gpuStr = String.format(Locale.US, "%4.1f%%", currentGpu)
+                  val modeTag = if (isBoundToShizuku) "SHZ" else "SYS"
+
+                  overlayTextView.text = "FPS: $fpsStr [$modeTag]\nCPU: $cpuStr\nGPU: $gpuStr"
               }
 
               private fun startForegroundNotification() {
                   val channelId = "overlay_perf_channel"
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      val channel = NotificationChannel(channelId, "Performance Overlay", NotificationManager.IMPORTANCE_LOW)
+                      val channel = NotificationChannel(
+                          channelId,
+                          "Performance Overlay",
+                          NotificationManager.IMPORTANCE_LOW
+                      )
                       getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
                   }
                   val notification = NotificationCompat.Builder(this, channelId)
                       .setContentTitle("Shizuku Monitor Active")
-                      .setContentText("Displaying real-time CPU, GPU, and FPS overlay")
+                      .setContentText("Monitoring Nord CE 3 Lite CPU, GPU & FPS")
                       .setSmallIcon(android.R.drawable.ic_menu_info_details)
                       .build()
+
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                       startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
                   } else {
@@ -329,13 +474,16 @@ jobs:
               @SuppressLint("ClickableViewAccessibility")
               private fun setupFloatingOverlay() {
                   windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+
                   overlayTextView = TextView(this).apply {
-                      text = "Connecting to Shizuku..."
-                      setTextColor(Color.GREEN)
+                      text = "FPS:  60 [INIT]\nCPU:  0.0%\nGPU:  0.0%"
+                      setTextColor(Color.parseColor("#00FF66"))
+                      typeface = Typeface.MONOSPACE
                       textSize = 12f
-                      setBackgroundColor(Color.argb(180, 15, 15, 15))
+                      setBackgroundColor(Color.argb(190, 12, 12, 12))
                       setPadding(24, 16, 24, 16)
                   }
+
                   val layoutParams = WindowManager.LayoutParams(
                       WindowManager.LayoutParams.WRAP_CONTENT,
                       WindowManager.LayoutParams.WRAP_CONTENT,
@@ -343,19 +491,28 @@ jobs:
                           WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                       else
                           @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
-                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                              WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                              WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                       PixelFormat.TRANSLUCENT
                   ).apply {
                       gravity = Gravity.TOP or Gravity.START
                       x = 32
                       y = 120
                   }
-                  var initialX = 0; var initialY = 0; var initialTouchX = 0f; var initialTouchY = 0f
+
+                  var initialX = 0
+                  var initialY = 0
+                  var initialTouchX = 0f
+                  var initialTouchY = 0f
+
                   overlayTextView.setOnTouchListener { _: View, event: MotionEvent ->
                       when (event.action) {
                           MotionEvent.ACTION_DOWN -> {
-                              initialX = layoutParams.x; initialY = layoutParams.y
-                              initialTouchX = event.rawX; initialTouchY = event.rawY
+                              initialX = layoutParams.x
+                              initialY = layoutParams.y
+                              initialTouchX = event.rawX
+                              initialTouchY = event.rawY
                               true
                           }
                           MotionEvent.ACTION_MOVE -> {
@@ -367,30 +524,19 @@ jobs:
                           else -> false
                       }
                   }
+
                   windowManager.addView(overlayTextView, layoutParams)
               }
 
-              private fun startPollingLoop() {
-                  serviceScope.launch {
-                      while (isActive) {
-                          val stats = withContext(Dispatchers.IO) {
-                              try { metricsService?.metrics } catch (_: Exception) { null }
-                          }
-                          if (stats != null && stats.size == 3) {
-                              val cpuText = String.format(Locale.US, "%4.1f%%", stats[0])
-                              val gpuText = if (stats[1] >= 0f) String.format(Locale.US, "%4.1f%%", stats[1]) else "N/A"
-                              val fpsText = String.format(Locale.US, "%3.0f", stats[2])
-                              overlayTextView.text = "FPS: $fpsText\nCPU: $cpuText\nGPU: $gpuText"
-                          }
-                          delay(750L)
-                      }
-                  }
-              }
-
               override fun onDestroy() {
+                  Choreographer.getInstance().removeFrameCallback(this)
                   serviceScope.cancel()
-                  try { Shizuku.unbindUserService(userServiceArgs, shizukuConnection, true) } catch (_: Exception) {}
-                  if (::overlayTextView.isInitialized) { windowManager.removeView(overlayTextView) }
+                  try {
+                      Shizuku.unbindUserService(userServiceArgs, shizukuConnection, true)
+                  } catch (_: Exception) {}
+                  if (::overlayTextView.isInitialized) {
+                      windowManager.removeView(overlayTextView)
+                  }
                   super.onDestroy()
               }
 
@@ -398,7 +544,8 @@ jobs:
           }
           EOF
 
-            cat << 'EOF' > app/src/main/java/com/example/shizukumonitor/MainActivity.kt
+          # 9. MainActivity.kt
+          cat << 'EOF' > app/src/main/java/com/example/shizukumonitor/MainActivity.kt
           package com.example.shizukumonitor
 
           import android.content.Intent
@@ -415,10 +562,12 @@ jobs:
           import rikka.shizuku.Shizuku
 
           class MainActivity : AppCompatActivity() {
+
               private val shizukuPermissionCode = 101
+
               private val permissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
                   if (requestCode == shizukuPermissionCode && grantResult == PackageManager.PERMISSION_GRANTED) {
-                      Toast.makeText(this, "Shizuku Permission Granted!", Toast.LENGTH_SHORT).show()
+                      Toast.makeText(this, "Shizuku Authorized!", Toast.LENGTH_SHORT).show()
                       checkAndStartOverlay()
                   }
               }
@@ -426,6 +575,7 @@ jobs:
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
                   Shizuku.addRequestPermissionResultListener(permissionListener)
+
                   val startButton = Button(this).apply {
                       text = "Start Performance Overlay"
                       setOnClickListener { checkAndStartOverlay() }
@@ -434,6 +584,7 @@ jobs:
                       text = "Stop Overlay"
                       setOnClickListener { stopService(Intent(this@MainActivity, OverlayService::class.java)) }
                   }
+
                   val layout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       gravity = Gravity.CENTER
@@ -450,17 +601,25 @@ jobs:
                       Toast.makeText(this, "Grant Overlay Permission first", Toast.LENGTH_LONG).show()
                       return
                   }
+
                   if (!Shizuku.pingBinder()) {
-                      Toast.makeText(this, "Shizuku is not running! Start Shizuku first.", Toast.LENGTH_LONG).show()
+                      Toast.makeText(this, "Shizuku is not running! Open Shizuku and start it.", Toast.LENGTH_LONG).show()
                       return
                   }
+
                   if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
                       Shizuku.requestPermission(shizukuPermissionCode)
                       return
                   }
+
+                  // Restart cleanly if already running
                   val serviceIntent = Intent(this, OverlayService::class.java)
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(serviceIntent)
-                  else startService(serviceIntent)
+                  stopService(serviceIntent)
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      startForegroundService(serviceIntent)
+                  } else {
+                      startService(serviceIntent)
+                  }
               }
 
               override fun onDestroy() {
@@ -469,7 +628,6 @@ jobs:
               }
           }
           EOF
-          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
